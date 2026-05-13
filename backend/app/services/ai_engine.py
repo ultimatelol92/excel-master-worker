@@ -155,9 +155,12 @@ IMPORTANT: Always respond with ONLY valid JSON - no markdown, no code blocks, ju
 class AIEngine:
     def __init__(self) -> None:
         api_key = os.getenv("OPENAI_API_KEY", "")
+        base_url = os.getenv("OPENAI_BASE_URL", "") or None
         if not api_key:
             logger.warning("OPENAI_API_KEY not set - AI features will be unavailable")
-        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self.client = (
+            AsyncOpenAI(api_key=api_key, base_url=base_url) if api_key else None
+        )
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
 
     async def generate_excel_spec(
