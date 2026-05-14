@@ -17,7 +17,7 @@ AI-powered Excel file generator, macro creator, and spreadsheet assistant. Works
 
 - **Backend**: Python, FastAPI, OpenAI API, openpyxl, xlsxwriter
 - **Frontend**: React, Vite, Lucide Icons
-- **AI**: GPT-4o or DeepSeek for understanding requests and generating Excel specifications
+- **AI**: Supports OpenAI GPT-4o, Anthropic Claude, and DeepSeek for understanding requests and generating Excel specifications
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ AI-powered Excel file generator, macro creator, and spreadsheet assistant. Works
 
 - Python 3.11+
 - Node.js 18+
-- API key (OpenAI or DeepSeek)
+- API key (OpenAI, Anthropic, or DeepSeek)
 
 ### Setup
 
@@ -48,6 +48,15 @@ AI-powered Excel file generator, macro creator, and spreadsheet assistant. Works
    For OpenAI:
    ```bash
    echo "OPENAI_API_KEY=your-key-here" > .env
+   ```
+
+   For Anthropic / Claude:
+   ```bash
+   cat > .env << EOF
+   AI_PROVIDER=anthropic
+   ANTHROPIC_API_KEY=your-anthropic-key
+   AI_MODEL=claude-sonnet-4-20250514
+   EOF
    ```
 
    For DeepSeek:

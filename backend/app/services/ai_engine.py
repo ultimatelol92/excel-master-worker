@@ -9,6 +9,9 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
+# Supported providers: "openai" (also covers DeepSeek, etc.) and "anthropic"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")
+
 SYSTEM_PROMPT = """You are an expert Excel and VBA macro developer. You help users create Excel files, 
 dashboards, complex formulas, and VBA macros. You have deep knowledge of:
 
@@ -154,24 +157,73 @@ IMPORTANT: Always respond with ONLY valid JSON - no markdown, no code blocks, ju
 
 class AIEngine:
     def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        base_url = os.getenv("OPENAI_BASE_URL", "") or None
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set - AI features will be unavailable")
-        self.client = (
-            AsyncOpenAI(api_key=api_key, base_url=base_url) if api_key else None
-        )
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.provider = os.getenv("AI_PROVIDER", "openai")
+        self.client = None
+        self.anthropic_client = None
+
+        if self.provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                logger.warning("ANTHROPIC_API_KEY not set - AI features will be unavailable")
+            else:
+                try:
+                    import anthropic
+                    self.anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
+                except ImportError:
+                    logger.error("anthropic package not installed: pip install anthropic")
+            self.model = os.getenv("AI_MODEL", "claude-sonnet-4-20250514")
+        else:
+            api_key = os.getenv("OPENAI_API_KEY", "")
+            base_url = os.getenv("OPENAI_BASE_URL", "") or None
+            if not api_key:
+                logger.warning("OPENAI_API_KEY not set - AI features will be unavailable")
+            self.client = (
+                AsyncOpenAI(api_key=api_key, base_url=base_url) if api_key else None
+            )
+            self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+    @property
+    def _is_available(self) -> bool:
+        return self.client is not None or self.anthropic_client is not None
+
+    async def _chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+    ) -> str:
+        if self.provider == "anthropic" and self.anthropic_client:
+            response = await self.anthropic_client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                temperature=0.3,
+                system=system_prompt,
+                messages=messages,
+            )
+            return response.content[0].text
+        elif self.client:
+            all_messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                *messages,
+            ]
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=all_messages,
+                temperature=0.3,
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content or "{}"
+        raise RuntimeError("No AI client available")
 
     async def generate_excel_spec(
         self,
         user_message: str,
         history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        if not self.client:
+        if not self._is_available:
             return self._fallback_response(user_message)
 
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = []
 
         if history:
             for msg in history:
@@ -180,16 +232,8 @@ class AIEngine:
         messages.append({"role": "user", "content": user_message})
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=4096,
-                response_format={"type": "json_object"},
-            )
-
-            content = response.choices[0].message.content or "{}"
-            return json.loads(content)
+            content = await self._chat(SYSTEM_PROMPT, messages)
+            return self._parse_json(content)
         except json.JSONDecodeError:
             logger.error("Failed to parse AI response as JSON")
             return self._fallback_response(user_message)
@@ -203,12 +247,10 @@ class AIEngine:
         instructions: str,
         history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        if not self.client:
+        if not self._is_available:
             return self._fallback_modify_response(instructions)
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": MODIFY_SYSTEM_PROMPT},
-        ]
+        messages: list[dict[str, Any]] = []
 
         if history:
             for msg in history:
@@ -221,19 +263,20 @@ class AIEngine:
         messages.append({"role": "user", "content": prompt})
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=4096,
-                response_format={"type": "json_object"},
-            )
-
-            content = response.choices[0].message.content or "{}"
-            return json.loads(content)
+            content = await self._chat(MODIFY_SYSTEM_PROMPT, messages)
+            return self._parse_json(content)
         except Exception:
             logger.exception("AI modify error")
             return self._fallback_modify_response(instructions)
+
+    @staticmethod
+    def _parse_json(text: str) -> dict[str, Any]:
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines)
+        return json.loads(text)
 
     @staticmethod
     def _fallback_response(user_message: str) -> dict[str, Any]:
